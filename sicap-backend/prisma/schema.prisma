@@ -1,0 +1,461 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// SEGURIDAD
+// ============================================================
+
+model Rol {
+  idRol       Int     @id @default(autoincrement()) @map("id_rol") @db.SmallInt
+  nombre      String  @unique @db.VarChar(50)
+  descripcion String? @db.VarChar(200)
+  estado      Boolean @default(true)
+
+  usuarios Usuario[]
+
+  @@map("roles")
+}
+
+model Usuario {
+  idUsuario           String    @id @default(uuid()) @map("id_usuario") @db.Uuid
+  idRol               Int       @map("id_rol") @db.SmallInt
+  nombre              String    @db.VarChar(100)
+  correo              String    @unique @db.VarChar(100)
+  passwordHash        String    @map("password_hash") @db.VarChar(255)
+  estado              Boolean   @default(true)
+  fechaCreacion       DateTime  @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+  fechaUltimaConexion DateTime? @map("fecha_ultima_conexion") @db.Timestamptz(6)
+
+  rol Rol @relation(fields: [idRol], references: [idRol])
+
+  auditorias             Auditoria[]
+  prospectosResponsable  Prospecto[]             @relation("ProspectoResponsable")
+  interaccionesCrm       InteraccionCrm[]
+  seguimientosCrm        SeguimientoCrm[]
+  pedidosRegistrados     Pedido[]                @relation("PedidoRegistradoPor")
+  cambiosEstadoPedido    HistorialEstadoPedido[] @relation("HistorialCambiadoPor")
+  rutasAsignadas         Ruta[]                  @relation("RutaRepartidor")
+  entregasRealizadas     Entrega[]               @relation("EntregaRepartidor")
+  incidenciasRegistradas Incidencia[]            @relation("IncidenciaRegistradoPor")
+  pagosRegistrados       Pago[]                  @relation("PagoRegistradoPor")
+  movimientosRegistrados MovimientoFinanciero[]  @relation("MovimientoRegistradoPor")
+
+  @@index([idRol])
+  @@map("usuarios")
+}
+
+model Auditoria {
+  idAuditoria     BigInt   @id @default(autoincrement()) @map("id_auditoria")
+  idUsuario       String?  @map("id_usuario") @db.Uuid
+  accion          String   @db.VarChar(50)
+  tablaAfectada   String   @map("tabla_afectada") @db.VarChar(50)
+  registroId      String?  @map("registro_id") @db.VarChar(100)
+  datosAnteriores Json?    @map("datos_anteriores") @db.JsonB
+  datosNuevos     Json?    @map("datos_nuevos") @db.JsonB
+  fechaHora       DateTime @default(now()) @map("fecha_hora") @db.Timestamptz(6)
+
+  usuario Usuario? @relation(fields: [idUsuario], references: [idUsuario], onDelete: SetNull)
+
+  @@index([idUsuario])
+  @@index([fechaHora])
+  @@map("auditoria")
+}
+
+// ============================================================
+// CLIENTES
+// ============================================================
+
+model Cliente {
+  idCliente          String   @id @default(uuid()) @map("id_cliente") @db.Uuid
+  nombre             String   @db.VarChar(100)
+  telefono           String   @db.VarChar(20)
+  correo             String?  @db.VarChar(100)
+  nit                String?  @db.VarChar(20)
+  estado             Boolean  @default(true)
+  fechaCreacion      DateTime @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+  fechaActualizacion DateTime @updatedAt @map("fecha_actualizacion") @db.Timestamptz(6)
+
+  direcciones DireccionCliente[]
+  pedidos     Pedido[]
+
+  @@index([nombre])
+  @@index([telefono])
+  @@map("clientes")
+}
+
+model DireccionCliente {
+  idDireccion   String   @id @default(uuid()) @map("id_direccion") @db.Uuid
+  idCliente     String   @map("id_cliente") @db.Uuid
+  direccion     String   @db.VarChar(255)
+  referencia    String?  @db.VarChar(255)
+  zona          String?  @db.VarChar(50)
+  latitud       Decimal? @db.Decimal(10, 7)
+  longitud      Decimal? @db.Decimal(10, 7)
+  estado        Boolean  @default(true)
+  fechaCreacion DateTime @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+
+  cliente Cliente  @relation(fields: [idCliente], references: [idCliente], onDelete: Cascade)
+  pedidos Pedido[]
+
+  @@index([idCliente])
+  @@map("direcciones_cliente")
+}
+
+// ============================================================
+// CRM
+// ============================================================
+
+model Prospecto {
+  idProspecto        String   @id @default(uuid()) @map("id_prospecto") @db.Uuid
+  nombre             String   @db.VarChar(100)
+  telefono           String   @db.VarChar(20)
+  correo             String?  @db.VarChar(100)
+  direccion          String?  @db.VarChar(255)
+  interes            String?
+  estado             String   @db.VarChar(20)
+  idResponsable      String?  @map("id_responsable") @db.Uuid
+  fechaCreacion      DateTime @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+  fechaActualizacion DateTime @updatedAt @map("fecha_actualizacion") @db.Timestamptz(6)
+
+  responsable   Usuario?            @relation("ProspectoResponsable", fields: [idResponsable], references: [idUsuario], onDelete: SetNull)
+  productos     ProspectoProducto[]
+  interacciones InteraccionCrm[]
+  seguimientos  SeguimientoCrm[]
+
+  @@index([idResponsable])
+  @@index([estado])
+  @@map("prospectos")
+}
+
+model ProspectoProducto {
+  idProspectoProducto String @id @default(uuid()) @map("id_prospecto_producto") @db.Uuid
+  idProspecto         String @map("id_prospecto") @db.Uuid
+  idProducto          String @map("id_producto") @db.Uuid
+  cantidadEstimada    Int?   @map("cantidad_estimada")
+
+  prospecto Prospecto @relation(fields: [idProspecto], references: [idProspecto], onDelete: Cascade)
+  producto  Producto  @relation(fields: [idProducto], references: [idProducto])
+
+  @@unique([idProspecto, idProducto])
+  @@index([idProducto])
+  @@map("prospecto_producto")
+}
+
+model InteraccionCrm {
+  idInteraccion String   @id @default(uuid()) @map("id_interaccion") @db.Uuid
+  idProspecto   String   @map("id_prospecto") @db.Uuid
+  idUsuario     String   @map("id_usuario") @db.Uuid
+  tipo          String   @db.VarChar(30)
+  descripcion   String
+  fechaHora     DateTime @default(now()) @map("fecha_hora") @db.Timestamptz(6)
+
+  prospecto Prospecto @relation(fields: [idProspecto], references: [idProspecto], onDelete: Cascade)
+  usuario   Usuario   @relation(fields: [idUsuario], references: [idUsuario])
+
+  @@index([idProspecto])
+  @@index([idUsuario])
+  @@index([fechaHora])
+  @@map("interacciones_crm")
+}
+
+model SeguimientoCrm {
+  idSeguimiento   String    @id @default(uuid()) @map("id_seguimiento") @db.Uuid
+  idProspecto     String    @map("id_prospecto") @db.Uuid
+  idUsuario       String    @map("id_usuario") @db.Uuid
+  fechaProgramada DateTime  @map("fecha_programada") @db.Timestamptz(6)
+  descripcion     String?
+  estado          String    @db.VarChar(20)
+  fechaCompletado DateTime? @map("fecha_completado") @db.Timestamptz(6)
+
+  prospecto Prospecto @relation(fields: [idProspecto], references: [idProspecto], onDelete: Cascade)
+  usuario   Usuario   @relation(fields: [idUsuario], references: [idUsuario])
+
+  @@index([idProspecto])
+  @@index([idUsuario])
+  @@index([fechaProgramada])
+  @@index([estado])
+  @@map("seguimientos_crm")
+}
+
+// ============================================================
+// PRODUCTOS Y PROMOCIONES
+// ============================================================
+
+model Producto {
+  idProducto         String   @id @default(uuid()) @map("id_producto") @db.Uuid
+  codigo             String   @unique @db.VarChar(20)
+  nombre             String   @db.VarChar(100)
+  descripcion        String?
+  precioActual       Decimal  @map("precio_actual") @db.Decimal(10, 2)
+  estado             Boolean  @default(true)
+  fechaCreacion      DateTime @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+  fechaActualizacion DateTime @updatedAt @map("fecha_actualizacion") @db.Timestamptz(6)
+
+  prospectos     ProspectoProducto[]
+  promociones    Promocion[]
+  detallesPedido DetallePedido[]
+
+  @@index([nombre])
+  @@map("productos")
+}
+
+model Promocion {
+  idPromocion        String    @id @default(uuid()) @map("id_promocion") @db.Uuid
+  idProducto         String    @map("id_producto") @db.Uuid
+  nombre             String    @db.VarChar(120)
+  cantidadRequerida  Int       @map("cantidad_requerida")
+  cantidadBonificada Int       @map("cantidad_bonificada")
+  fechaInicio        DateTime  @map("fecha_inicio") @db.Date
+  fechaFin           DateTime? @map("fecha_fin") @db.Date
+  estado             Boolean   @default(true)
+  fechaCreacion      DateTime  @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+
+  producto Producto @relation(fields: [idProducto], references: [idProducto])
+
+  @@index([idProducto])
+  @@index([fechaInicio, fechaFin])
+  @@map("promociones")
+}
+
+// ============================================================
+// PEDIDOS
+// ============================================================
+
+model Pedido {
+  idPedido               String   @id @default(uuid()) @map("id_pedido") @db.Uuid
+  numeroPedido           String   @unique @map("numero_pedido") @db.VarChar(25)
+  idCliente              String   @map("id_cliente") @db.Uuid
+  idDireccion            String   @map("id_direccion") @db.Uuid
+  registradoPor          String?  @map("registrado_por") @db.Uuid
+  fechaPedido            DateTime @default(now()) @map("fecha_pedido") @db.Timestamptz(6)
+  fechaEntregaSolicitada DateTime @map("fecha_entrega_solicitada") @db.Date
+  tipoVenta              String   @map("tipo_venta") @db.VarChar(10)
+  estado                 String   @db.VarChar(25)
+  total                  Decimal  @db.Decimal(12, 2)
+  observaciones          String?
+  fechaActualizacion     DateTime @updatedAt @map("fecha_actualizacion") @db.Timestamptz(6)
+
+  cliente         Cliente          @relation(fields: [idCliente], references: [idCliente])
+  direccion       DireccionCliente @relation(fields: [idDireccion], references: [idDireccion])
+  usuarioRegistro Usuario?         @relation("PedidoRegistradoPor", fields: [registradoPor], references: [idUsuario], onDelete: SetNull)
+
+  detalles         DetallePedido[]
+  historialEstados HistorialEstadoPedido[]
+  detallesRuta     DetalleRuta[]
+  entregas         Entrega[]
+  cuentaPorCobrar  CuentaPorCobrar?
+  pagos            Pago[]
+
+  @@index([idCliente])
+  @@index([idDireccion])
+  @@index([registradoPor])
+  @@index([fechaEntregaSolicitada])
+  @@index([estado])
+  @@map("pedidos")
+}
+
+model DetallePedido {
+  idDetalle      String  @id @default(uuid()) @map("id_detalle") @db.Uuid
+  idPedido       String  @map("id_pedido") @db.Uuid
+  idProducto     String  @map("id_producto") @db.Uuid
+  cantidad       Int
+  precioUnitario Decimal @map("precio_unitario") @db.Decimal(10, 2)
+
+  pedido          Pedido           @relation(fields: [idPedido], references: [idPedido], onDelete: Cascade)
+  producto        Producto         @relation(fields: [idProducto], references: [idProducto])
+  detallesEntrega DetalleEntrega[]
+
+  @@unique([idPedido, idProducto])
+  @@index([idProducto])
+  @@map("detalle_pedido")
+}
+
+model HistorialEstadoPedido {
+  idHistorial    BigInt   @id @default(autoincrement()) @map("id_historial")
+  idPedido       String   @map("id_pedido") @db.Uuid
+  cambiadoPor    String?  @map("cambiado_por") @db.Uuid
+  estadoAnterior String?  @map("estado_anterior") @db.VarChar(25)
+  estadoNuevo    String   @map("estado_nuevo") @db.VarChar(25)
+  fechaHora      DateTime @default(now()) @map("fecha_hora") @db.Timestamptz(6)
+  observaciones  String?
+
+  pedido  Pedido   @relation(fields: [idPedido], references: [idPedido], onDelete: Cascade)
+  usuario Usuario? @relation("HistorialCambiadoPor", fields: [cambiadoPor], references: [idUsuario], onDelete: SetNull)
+
+  @@index([idPedido])
+  @@index([cambiadoPor])
+  @@index([fechaHora])
+  @@map("historial_estados_pedido")
+}
+
+// ============================================================
+// LOGÍSTICA
+// ============================================================
+
+model Ruta {
+  idRuta             String   @id @default(uuid()) @map("id_ruta") @db.Uuid
+  codigoRuta         String   @unique @map("codigo_ruta") @db.VarChar(25)
+  nombre             String   @db.VarChar(100)
+  fecha              DateTime @db.Date
+  idRepartidor       String   @map("id_repartidor") @db.Uuid
+  estado             String   @db.VarChar(20)
+  observaciones      String?
+  fechaCreacion      DateTime @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+  fechaActualizacion DateTime @updatedAt @map("fecha_actualizacion") @db.Timestamptz(6)
+
+  repartidor Usuario       @relation("RutaRepartidor", fields: [idRepartidor], references: [idUsuario])
+  detalles   DetalleRuta[]
+
+  @@index([idRepartidor])
+  @@index([fecha])
+  @@index([estado])
+  @@map("rutas")
+}
+
+model DetalleRuta {
+  idDetalleRuta   String    @id @default(uuid()) @map("id_detalle_ruta") @db.Uuid
+  idRuta          String    @map("id_ruta") @db.Uuid
+  idPedido        String    @map("id_pedido") @db.Uuid
+  ordenParada     Int       @map("orden_parada")
+  estado          String    @db.VarChar(20)
+  horaEstimada    DateTime? @map("hora_estimada") @db.Time(6)
+  fechaAsignacion DateTime  @default(now()) @map("fecha_asignacion") @db.Timestamptz(6)
+
+  ruta     Ruta      @relation(fields: [idRuta], references: [idRuta], onDelete: Cascade)
+  pedido   Pedido    @relation(fields: [idPedido], references: [idPedido])
+  entregas Entrega[]
+
+  @@unique([idRuta, idPedido])
+  @@unique([idRuta, ordenParada])
+  @@index([idPedido])
+  @@map("detalle_ruta")
+}
+
+model Entrega {
+  idEntrega     String   @id @default(uuid()) @map("id_entrega") @db.Uuid
+  idPedido      String   @map("id_pedido") @db.Uuid
+  idDetalleRuta String   @map("id_detalle_ruta") @db.Uuid
+  idRepartidor  String   @map("id_repartidor") @db.Uuid
+  numeroIntento Int      @map("numero_intento") @db.SmallInt
+  fechaHora     DateTime @map("fecha_hora") @db.Timestamptz(6)
+  estado        String   @db.VarChar(20)
+  observaciones String?
+  fechaRegistro DateTime @default(now()) @map("fecha_registro") @db.Timestamptz(6)
+
+  pedido      Pedido      @relation(fields: [idPedido], references: [idPedido])
+  detalleRuta DetalleRuta @relation(fields: [idDetalleRuta], references: [idDetalleRuta])
+  repartidor  Usuario     @relation("EntregaRepartidor", fields: [idRepartidor], references: [idUsuario])
+
+  detalles    DetalleEntrega[]
+  incidencias Incidencia[]
+
+  @@unique([idPedido, numeroIntento])
+  @@index([idDetalleRuta])
+  @@index([idRepartidor])
+  @@index([fechaHora])
+  @@map("entregas")
+}
+
+model DetalleEntrega {
+  idDetalleEntrega  String @id @default(uuid()) @map("id_detalle_entrega") @db.Uuid
+  idEntrega         String @map("id_entrega") @db.Uuid
+  idDetallePedido   String @map("id_detalle_pedido") @db.Uuid
+  cantidadEntregada Int    @map("cantidad_entregada")
+
+  entrega       Entrega       @relation(fields: [idEntrega], references: [idEntrega], onDelete: Cascade)
+  detallePedido DetallePedido @relation(fields: [idDetallePedido], references: [idDetalle])
+
+  @@unique([idEntrega, idDetallePedido])
+  @@index([idDetallePedido])
+  @@map("detalle_entrega")
+}
+
+model Incidencia {
+  idIncidencia  String   @id @default(uuid()) @map("id_incidencia") @db.Uuid
+  idEntrega     String   @map("id_entrega") @db.Uuid
+  tipo          String   @db.VarChar(50)
+  descripcion   String
+  registradoPor String   @map("registrado_por") @db.Uuid
+  fechaHora     DateTime @default(now()) @map("fecha_hora") @db.Timestamptz(6)
+
+  entrega Entrega @relation(fields: [idEntrega], references: [idEntrega], onDelete: Cascade)
+  usuario Usuario @relation("IncidenciaRegistradoPor", fields: [registradoPor], references: [idUsuario])
+
+  @@index([idEntrega])
+  @@index([registradoPor])
+  @@index([fechaHora])
+  @@map("incidencias")
+}
+
+// ============================================================
+// FINANZAS
+// ============================================================
+
+model CuentaPorCobrar {
+  idCuenta           String   @id @default(uuid()) @map("id_cuenta") @db.Uuid
+  idPedido           String   @unique @map("id_pedido") @db.Uuid
+  montoOriginal      Decimal  @map("monto_original") @db.Decimal(12, 2)
+  fechaVencimiento   DateTime @map("fecha_vencimiento") @db.Date
+  estado             String   @db.VarChar(20)
+  fechaCreacion      DateTime @default(now()) @map("fecha_creacion") @db.Timestamptz(6)
+  fechaActualizacion DateTime @updatedAt @map("fecha_actualizacion") @db.Timestamptz(6)
+
+  pedido Pedido @relation(fields: [idPedido], references: [idPedido])
+
+  @@index([estado])
+  @@index([fechaVencimiento])
+  @@map("cuentas_por_cobrar")
+}
+
+model Pago {
+  idPago        String   @id @default(uuid()) @map("id_pago") @db.Uuid
+  idPedido      String   @map("id_pedido") @db.Uuid
+  registradoPor String   @map("registrado_por") @db.Uuid
+  monto         Decimal  @db.Decimal(12, 2)
+  fechaPago     DateTime @default(now()) @map("fecha_pago") @db.Timestamptz(6)
+  observaciones String?
+
+  pedido  Pedido  @relation(fields: [idPedido], references: [idPedido])
+  usuario Usuario @relation("PagoRegistradoPor", fields: [registradoPor], references: [idUsuario])
+
+  @@index([idPedido])
+  @@index([registradoPor])
+  @@index([fechaPago])
+  @@map("pagos")
+}
+
+model CategoriaEgreso {
+  idCategoria Int     @id @default(autoincrement()) @map("id_categoria") @db.SmallInt
+  nombre      String  @unique @db.VarChar(80)
+  descripcion String? @db.VarChar(200)
+  estado      Boolean @default(true)
+
+  movimientos MovimientoFinanciero[]
+
+  @@map("categorias_egreso")
+}
+
+model MovimientoFinanciero {
+  idMovimiento    String   @id @default(uuid()) @map("id_movimiento") @db.Uuid
+  tipo            String   @db.VarChar(15)
+  idCategoria     Int?     @map("id_categoria") @db.SmallInt
+  monto           Decimal  @db.Decimal(12, 2)
+  concepto        String   @db.VarChar(150)
+  descripcion     String?
+  registradoPor   String   @map("registrado_por") @db.Uuid
+  fechaMovimiento DateTime @default(now()) @map("fecha_movimiento") @db.Timestamptz(6)
+
+  categoria CategoriaEgreso? @relation(fields: [idCategoria], references: [idCategoria], onDelete: SetNull)
+  usuario   Usuario          @relation("MovimientoRegistradoPor", fields: [registradoPor], references: [idUsuario])
+
+  @@index([idCategoria])
+  @@index([registradoPor])
+  @@index([fechaMovimiento])
+  @@index([tipo])
+  @@map("movimientos_financieros")
+}
