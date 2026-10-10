@@ -1,47 +1,83 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
-import { DataTable } from "@/components/ui/data-table";
-import { columns } from "@/components/clients/columns";
-import { clientService, Client } from "@/services/clientService";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ClientFormModal } from "@/components/clients/ClientFormModal";
-import { ClientFormData } from "@/lib/validations/client";
-import { toast } from "sonner";
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus } from 'lucide-react';
+import { toast } from 'sonner';
+
+import { Button } from '@/components/ui/button';
+import { DataTable } from '@/components/ui/data-table';
+
+import { ClientFormModal } from '@/components/clients/ClientFormModal';
+import { columns } from '@/components/clients/columns';
+
+import {
+  Client,
+  ClientCreateData,
+  clientService,
+} from '@/services/clientService';
+
+function getErrorMessage(error: unknown): string {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error
+  ) {
+    const axiosError = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+        };
+      };
+    };
+
+    const message = axiosError.response?.data?.message;
+
+    if (Array.isArray(message)) {
+      return message.join(', ');
+    }
+
+    if (message) {
+      return message;
+    }
+  }
+
+  return 'Ocurrió un error inesperado';
+}
 
 export default function ClientsPage() {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editingClient, setEditingClient] = useState<Client | null>(null);
-
   const queryClient = useQueryClient();
 
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedClient, setSelectedClient] =
+    useState<Client | null>(null);
+
   const {
-    data: clients,
+    data: clients = [],
     isLoading,
     error,
   } = useQuery({
-    queryKey: ["clients"],
+    queryKey: ['clients'],
     queryFn: clientService.getAll,
   });
 
   const createMutation = useMutation({
-    mutationFn: clientService.create,
+    mutationFn: (data: ClientCreateData) =>
+      clientService.create(data),
 
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["clients"],
+        queryKey: ['clients'],
       });
 
-      toast.success("Cliente creado exitosamente");
+      toast.success('Cliente creado correctamente');
+
       setModalOpen(false);
-      setEditingClient(null);
+      setSelectedClient(null);
     },
 
     onError: (error) => {
-      console.error(error);
-      toast.error("Error al crear cliente");
+      toast.error(getErrorMessage(error));
     },
   });
 
@@ -56,79 +92,77 @@ export default function ClientsPage() {
 
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["clients"],
+        queryKey: ['clients'],
       });
 
-      toast.success("Cliente actualizado");
+      toast.success('Cliente actualizado correctamente');
+
       setModalOpen(false);
-      setEditingClient(null);
+      setSelectedClient(null);
     },
 
     onError: (error) => {
-      console.error(error);
-      toast.error("Error al actualizar cliente");
+      toast.error(getErrorMessage(error));
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: clientService.delete,
+    mutationFn: (id: string) =>
+      clientService.delete(id),
 
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["clients"],
+        queryKey: ['clients'],
       });
 
-      toast.success("Cliente desactivado correctamente");
+      toast.success('Cliente desactivado correctamente');
     },
 
     onError: (error) => {
-      console.error(error);
-      toast.error("Error al eliminar cliente");
+      toast.error(getErrorMessage(error));
     },
   });
 
-  const handleCreate = (data: ClientFormData) => {
-    createMutation.mutate(data);
-  };
-
-  const handleEdit = (client: Client) => {
-    setEditingClient(client);
+  const handleNewClient = () => {
+    setSelectedClient(null);
     setModalOpen(true);
   };
 
-  const handleUpdate = (data: ClientFormData) => {
-    if (!editingClient) return;
-
-    updateMutation.mutate({
-      id: editingClient.id,
-      data,
-    });
+  const handleEdit = (client: Client) => {
+    setSelectedClient(client);
+    setModalOpen(true);
   };
 
   const handleDelete = (client: Client) => {
     const confirmed = window.confirm(
-      `¿Deseas desactivar al cliente "${client.name}"?`,
+      `¿Desea desactivar al cliente ${client.name}?`,
     );
 
-    if (!confirmed) return;
+    if (!confirmed) {
+      return;
+    }
 
     deleteMutation.mutate(client.id);
   };
 
-  const handleSubmit = (data: ClientFormData) => {
-    if (editingClient) {
-      handleUpdate(data);
-    } else {
-      handleCreate(data);
-    }
-  };
+ const clientColumns = columns(
+  handleEdit,
+  handleDelete,
+);
 
-  const handleModalChange = (open: boolean) => {
-    setModalOpen(open);
+  const handleSubmit = async (
+    data: ClientCreateData,
+  ) => {
+    if (selectedClient) {
+      await updateMutation.mutateAsync({
+        id: selectedClient.id,
+        data,
+      });
 
-    if (!open) {
-      setEditingClient(null);
+      return;
     }
+
+    await createMutation.mutateAsync(data);
   };
 
   if (isLoading) {
@@ -136,48 +170,48 @@ export default function ClientsPage() {
   }
 
   if (error) {
-    console.error(error);
-
     return (
       <div className="text-red-500">
-        Error al cargar clientes.
+        Error al cargar los clientes.
       </div>
     );
   }
 
-  const columnsWithActions = columns(
-    handleEdit,
-    handleDelete,
-  );
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">
-          Clientes
-        </h1>
+        <div>
+          <h1 className="text-3xl font-bold">
+            Clientes
+          </h1>
 
-        <Button
-          onClick={() => {
-            setEditingClient(null);
-            setModalOpen(true);
-          }}
-        >
+          <p className="text-sm text-muted-foreground">
+            Gestión de clientes de Purificadora Rehobot.
+          </p>
+        </div>
+
+        <Button onClick={handleNewClient}>
           <Plus className="mr-2 h-4 w-4" />
           Nuevo Cliente
         </Button>
       </div>
 
       <DataTable
-        columns={columnsWithActions}
-        data={clients ?? []}
+        columns={clientColumns}
+        data={clients}
       />
 
       <ClientFormModal
         open={modalOpen}
-        onOpenChange={handleModalChange}
+        onOpenChange={(open) => {
+          setModalOpen(open);
+
+          if (!open) {
+            setSelectedClient(null);
+          }
+        }}
         onSubmit={handleSubmit}
-        initialData={editingClient}
+        initialData={selectedClient}
       />
     </div>
   );

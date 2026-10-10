@@ -1,6 +1,6 @@
 import api from "@/lib/axios";
 
-interface BackendClientAddress {
+export interface BackendClientAddress {
   idDireccion: string;
   idCliente: string;
   direccion: string;
@@ -30,10 +30,10 @@ export interface Client {
   phone: string;
   address: string;
   createdAt: string;
-
   nit?: string;
   active?: boolean;
   addressId?: string;
+  addresses: BackendClientAddress[];
 }
 
 export interface ClientCreateData {
@@ -44,8 +44,11 @@ export interface ClientCreateData {
 }
 
 function mapClient(client: BackendClient): Client {
+  const activeAddresses =
+    client.direcciones?.filter((address) => address.estado) ?? [];
+
   const primaryAddress =
-    client.direcciones?.find((address) => address.estado) ??
+    activeAddresses[0] ??
     client.direcciones?.[0];
 
   return {
@@ -58,6 +61,7 @@ function mapClient(client: BackendClient): Client {
     nit: client.nit ?? "",
     active: client.estado,
     addressId: primaryAddress?.idDireccion,
+    addresses: activeAddresses,
   };
 }
 
@@ -65,7 +69,9 @@ export const clientService = {
   getAll: async (): Promise<Client[]> => {
     const response = await api.get<BackendClient[]>("/clients");
 
-    return response.data.map(mapClient);
+    return response.data
+      .map(mapClient)
+      .filter((client) => client.active);
   },
 
   getById: async (id: string): Promise<Client> => {
@@ -85,10 +91,13 @@ export const clientService = {
     const createdClient = clientResponse.data;
 
     if (data.address.trim()) {
-      await api.post(`/clients/${createdClient.idCliente}/addresses`, {
-        direccion: data.address.trim(),
-        estado: true,
-      });
+      await api.post(
+        `/clients/${createdClient.idCliente}/addresses`,
+        {
+          direccion: data.address.trim(),
+          estado: true,
+        },
+      );
     }
 
     return clientService.getById(createdClient.idCliente);

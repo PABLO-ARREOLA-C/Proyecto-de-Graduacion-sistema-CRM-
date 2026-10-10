@@ -13,8 +13,7 @@ import {
   WalletCards,
 } from "lucide-react";
 
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-
+import { authOptions } from "@/lib/auth";
 type MetricCardProps = {
   title: string;
   value: string;
