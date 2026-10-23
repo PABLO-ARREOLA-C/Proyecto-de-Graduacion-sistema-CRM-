@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { serializableTransaction } from '../prisma/serializable-transaction';
 
 import { CreateReceivableDto } from './dto/create-receivable.dto';
 
@@ -96,17 +97,21 @@ export class FinancesService {
   }
 
   private startOfToday(): Date {
-    const hoy = new Date();
+    const fecha = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Guatemala',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
 
-    hoy.setHours(0, 0, 0, 0);
-
-    return hoy;
+    // Las fechas de vencimiento son columnas DATE, devueltas a medianoche UTC.
+    return new Date(`${fecha}T00:00:00.000Z`);
   }
 
   private normalizeDate(date: Date): Date {
     const normalizedDate = new Date(date);
 
-    normalizedDate.setHours(0, 0, 0, 0);
+    normalizedDate.setUTCHours(0, 0, 0, 0);
 
     return normalizedDate;
   }
@@ -203,83 +208,106 @@ export class FinancesService {
   // ============================================================
 
   async createReceivable(dto: CreateReceivableDto, idUsuario: string) {
-    const usuario = await this.prisma.usuario.findUnique({
-      where: {
-        idUsuario,
-      },
+    try {
+      return await serializableTransaction(this.prisma, async (tx) => {
+        const usuario = await tx.usuario.findUnique({
+          where: {
+            idUsuario,
+          },
 
-      include: {
-        rol: true,
-      },
-    });
+          include: {
+            rol: true,
+          },
+        });
 
-    if (!usuario || !usuario.estado) {
-      throw new BadRequestException(
-        'El usuario que registra la operación no está activo',
-      );
+        if (!usuario || !usuario.estado) {
+          throw new BadRequestException(
+            'El usuario que registra la operación no está activo',
+          );
+        }
+
+        const pedido = await tx.pedido.findUnique({
+          where: {
+            idPedido: dto.idPedido,
+          },
+
+          include: {
+            cuentaPorCobrar: true,
+            pagos: true,
+          },
+        });
+
+        if (!pedido) {
+          throw new NotFoundException('Pedido no encontrado');
+        }
+
+        if (pedido.tipoVenta !== 'CREDITO') {
+          throw new BadRequestException(
+            'Solo los pedidos a crédito pueden generar una cuenta por cobrar',
+          );
+        }
+
+        if (pedido.estado === 'CANCELADO') {
+          throw new BadRequestException(
+            'No se puede generar una cuenta por cobrar para un pedido cancelado',
+          );
+        }
+
+        if (pedido.cuentaPorCobrar) {
+          throw new ConflictException(
+            'El pedido ya tiene una cuenta por cobrar',
+          );
+        }
+
+        const totalPagado = pedido.pagos.reduce(
+          (sum, pago) => sum.add(pago.monto),
+          new Prisma.Decimal(0),
+        );
+        if (totalPagado.gte(pedido.total)) {
+          throw new BadRequestException(
+            'El pedido no tiene saldo pendiente para crear una cuenta por cobrar',
+          );
+        }
+
+        const fechaVencimiento = this.normalizeDate(
+          this.parseGuatemalaDate(dto.fechaVencimiento.slice(0, 10)),
+        );
+
+        const hoy = this.startOfToday();
+
+        const vencimiento = this.normalizeDate(fechaVencimiento);
+
+        if (vencimiento < hoy) {
+          throw new BadRequestException(
+            'La fecha de vencimiento no puede ser anterior a la fecha actual',
+          );
+        }
+
+        const cuenta = await tx.cuentaPorCobrar.create({
+          data: {
+            idPedido: pedido.idPedido,
+
+            montoOriginal: pedido.total,
+
+            fechaVencimiento,
+
+            estado: 'PENDIENTE',
+          },
+
+          include: receivableInclude,
+        });
+
+        return this.buildReceivableResponse(cuenta);
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('El pedido ya tiene una cuenta por cobrar');
+      }
+      throw error;
     }
-
-    const pedido = await this.prisma.pedido.findUnique({
-      where: {
-        idPedido: dto.idPedido,
-      },
-
-      include: {
-        cuentaPorCobrar: true,
-      },
-    });
-
-    if (!pedido) {
-      throw new NotFoundException('Pedido no encontrado');
-    }
-
-    if (pedido.tipoVenta !== 'CREDITO') {
-      throw new BadRequestException(
-        'Solo los pedidos a crédito pueden generar una cuenta por cobrar',
-      );
-    }
-
-    if (pedido.estado === 'CANCELADO') {
-      throw new BadRequestException(
-        'No se puede generar una cuenta por cobrar para un pedido cancelado',
-      );
-    }
-
-    if (pedido.cuentaPorCobrar) {
-      throw new ConflictException('El pedido ya tiene una cuenta por cobrar');
-    }
-
-    const fechaVencimiento = new Date(dto.fechaVencimiento);
-
-    if (Number.isNaN(fechaVencimiento.getTime())) {
-      throw new BadRequestException('La fecha de vencimiento no es válida');
-    }
-
-    const hoy = this.startOfToday();
-
-    const vencimiento = this.normalizeDate(fechaVencimiento);
-
-    if (vencimiento < hoy) {
-      throw new BadRequestException(
-        'La fecha de vencimiento no puede ser anterior a la fecha actual',
-      );
-    }
-
-    const cuenta = await this.prisma.cuentaPorCobrar.create({
-      data: {
-        idPedido: pedido.idPedido,
-
-        montoOriginal: pedido.total,
-
-        fechaVencimiento,
-
-        estado: 'PENDIENTE',
-      },
-
-      include: receivableInclude,
-    });
-
-    return this.buildReceivableResponse(cuenta);
   }
 
   async findAllReceivables() {
@@ -361,306 +389,218 @@ export class FinancesService {
 
   async createPayment(
     idCuenta: string,
-
     dto: CreatePaymentDto,
-
     idUsuario: string,
   ) {
-    const cuenta = await this.prisma.cuentaPorCobrar.findUnique({
-      where: {
-        idCuenta,
-      },
-
-      include: {
-        pedido: {
-          include: {
-            pagos: true,
-          },
-        },
-      },
-    });
-
-    if (!cuenta) {
-      throw new NotFoundException('Cuenta por cobrar no encontrada');
-    }
-
-    if (cuenta.estado === 'PAGADA') {
-      throw new BadRequestException(
-        'La cuenta por cobrar ya se encuentra pagada',
-      );
-    }
-
-    if (cuenta.pedido.estado === 'CANCELADO') {
-      throw new BadRequestException(
-        'No se pueden registrar pagos para un pedido cancelado',
-      );
-    }
-
-    const usuario = await this.prisma.usuario.findUnique({
-      where: {
-        idUsuario,
-      },
-    });
-
-    if (!usuario || !usuario.estado) {
-      throw new BadRequestException(
-        'El usuario que registra el pago no está activo',
-      );
-    }
-
-    const montoOriginal = this.decimalToNumber(cuenta.montoOriginal);
-
-    const totalPagado = this.calculatePaidAmount(cuenta.pedido.pagos);
-
-    const saldoPendiente = Number((montoOriginal - totalPagado).toFixed(2));
-
-    const montoPago = Number(dto.monto.toFixed(2));
-
-    if (montoPago <= 0) {
-      throw new BadRequestException(
-        'El monto del pago debe ser mayor que cero',
-      );
-    }
-
-    if (saldoPendiente <= 0) {
-      throw new BadRequestException(
-        'La cuenta por cobrar no tiene saldo pendiente',
-      );
-    }
-
-    if (montoPago > saldoPendiente) {
-      throw new BadRequestException(
-        `El pago excede el saldo pendiente de Q${saldoPendiente.toFixed(2)}`,
-      );
-    }
-
-    const nuevoSaldo = Number((saldoPendiente - montoPago).toFixed(2));
-
-    const resultado = await this.prisma.$transaction(async (tx) => {
-      const pago = await tx.pago.create({
-        data: {
-          idPedido: cuenta.idPedido,
-
-          registradoPor: idUsuario,
-
-          monto: new Prisma.Decimal(montoPago),
-
-          observaciones: dto.observaciones?.trim() || null,
-        },
-
-        include: {
-          usuario: {
-            select: {
-              idUsuario: true,
-
-              nombre: true,
-
-              correo: true,
-            },
-          },
-        },
-      });
-
-      const movimiento = await tx.movimientoFinanciero.create({
-        data: {
-          tipo: 'INGRESO',
-
-          idCategoria: null,
-
-          monto: new Prisma.Decimal(montoPago),
-
-          concepto: `Pago de ${cuenta.pedido.numeroPedido}`,
-
-          descripcion:
-            dto.observaciones?.trim() ||
-            `Pago en efectivo registrado para el pedido ${cuenta.pedido.numeroPedido}`,
-
-          registradoPor: idUsuario,
-        },
-      });
-
-      const cuentaActualizada = await tx.cuentaPorCobrar.update({
-        where: {
-          idCuenta,
-        },
-
-        data: {
-          estado: nuevoSaldo === 0 ? 'PAGADA' : 'PENDIENTE',
-        },
-      });
-
-      return {
-        pago,
-
-        movimiento,
-
-        cuenta: cuentaActualizada,
-
-        totalPagado: Number((totalPagado + montoPago).toFixed(2)),
-
-        saldoPendiente: nuevoSaldo,
-      };
-    });
-
-    return resultado;
+    return this.registerPayment({ idCuenta }, dto, idUsuario);
   }
-
-  // ============================================================
-
-  // PAGOS DE PEDIDOS AL CONTADO
-
-  // ============================================================
 
   async createCashPayment(
     idPedido: string,
-
     dto: CreatePaymentDto,
-
     idUsuario: string,
   ) {
-    const pedido = await this.prisma.pedido.findUnique({
-      where: {
-        idPedido,
-      },
+    return this.registerPayment({ idPedido }, dto, idUsuario);
+  }
 
-      include: {
-        pagos: true,
-
-        cuentaPorCobrar: true,
-      },
-    });
-
-    if (!pedido) {
-      throw new NotFoundException('Pedido no encontrado');
-    }
-
-    if (pedido.tipoVenta !== 'CONTADO') {
+  private async registerPayment(
+    target: { idCuenta: string } | { idPedido: string },
+    dto: CreatePaymentDto,
+    idUsuario: string,
+  ) {
+    const monto = new Prisma.Decimal(dto.monto);
+    if (!monto.isFinite() || monto.lte(0) || monto.decimalPlaces() > 2) {
       throw new BadRequestException(
-        'Este endpoint solo permite registrar pagos de pedidos al contado',
+        'El monto debe ser positivo y tener como maximo dos decimales',
       );
     }
+    const observaciones = dto.observaciones?.trim() || null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.prisma.$transaction(
+          async (tx) => {
+            const usuario = await tx.usuario.findUnique({
+              where: { idUsuario },
+            });
+            if (!usuario || !usuario.estado) {
+              throw new BadRequestException(
+                'El usuario que registra el pago no esta activo',
+              );
+            }
+            const cuenta =
+              'idCuenta' in target
+                ? await tx.cuentaPorCobrar.findUnique({
+                    where: { idCuenta: target.idCuenta },
+                  })
+                : null;
+            if ('idCuenta' in target && !cuenta) {
+              throw new NotFoundException('Cuenta por cobrar no encontrada');
+            }
+            const idPedido =
+              'idPedido' in target ? target.idPedido : cuenta!.idPedido;
+            const pedido = await tx.pedido.findUnique({
+              where: { idPedido },
+              include: { pagos: true, cuentaPorCobrar: true },
+            });
+            if (!pedido) throw new NotFoundException('Pedido no encontrado');
 
-    if (pedido.estado === 'CANCELADO') {
-      throw new BadRequestException(
-        'No se pueden registrar pagos para un pedido cancelado',
-      );
-    }
-
-    if (pedido.cuentaPorCobrar) {
-      throw new BadRequestException(
-        'Un pedido al contado no debe tener una cuenta por cobrar',
-      );
-    }
-
-    const usuario = await this.prisma.usuario.findUnique({
-      where: {
-        idUsuario,
-      },
-    });
-
-    if (!usuario || !usuario.estado) {
-      throw new BadRequestException(
-        'El usuario que registra el pago no está activo',
-      );
-    }
-
-    const totalPedido = this.decimalToNumber(pedido.total);
-
-    const totalPagado = this.calculatePaidAmount(pedido.pagos);
-
-    const saldoPendiente = Number((totalPedido - totalPagado).toFixed(2));
-
-    const montoPago = Number(dto.monto.toFixed(2));
-
-    if (montoPago <= 0) {
-      throw new BadRequestException(
-        'El monto del pago debe ser mayor que cero',
-      );
-    }
-
-    if (saldoPendiente <= 0) {
-      throw new BadRequestException(
-        'El pedido al contado ya se encuentra pagado',
-      );
-    }
-
-    if (montoPago > saldoPendiente) {
-      throw new BadRequestException(
-        `El pago excede el saldo pendiente de Q${saldoPendiente.toFixed(2)}`,
-      );
-    }
-
-    const nuevoTotalPagado = Number((totalPagado + montoPago).toFixed(2));
-
-    const nuevoSaldo = Number((totalPedido - nuevoTotalPagado).toFixed(2));
-
-    return this.prisma.$transaction(async (tx) => {
-      const pago = await tx.pago.create({
-        data: {
-          idPedido: pedido.idPedido,
-
-          registradoPor: idUsuario,
-
-          monto: new Prisma.Decimal(montoPago),
-
-          observaciones: dto.observaciones?.trim() || null,
-        },
-
-        include: {
-          usuario: {
-            select: {
-              idUsuario: true,
-
-              nombre: true,
-
-              correo: true,
-            },
+            // La clave persiste como idPago: no requiere otra tabla ni migracion.
+            const existing = await tx.pago.findUnique({
+              where: { idPago: dto.idOperacion },
+            });
+            if (
+              existing &&
+              (existing.idPedido !== idPedido ||
+                existing.registradoPor !== idUsuario ||
+                !existing.monto.equals(monto) ||
+                existing.observaciones !== observaciones)
+            ) {
+              throw new ConflictException(
+                'El identificador de operacion ya se utilizo con otros datos',
+              );
+            }
+            const total = cuenta?.montoOriginal ?? pedido.total;
+            const totalPagado = pedido.pagos.reduce(
+              (sum, pago) => sum.add(pago.monto),
+              new Prisma.Decimal(0),
+            );
+            if (existing) {
+              return {
+                pago: {
+                  ...existing,
+                  usuario: {
+                    idUsuario: usuario.idUsuario,
+                    nombre: usuario.nombre,
+                    correo: usuario.correo,
+                  },
+                },
+                movimiento: null,
+                cuenta,
+                pedido: {
+                  idPedido,
+                  numeroPedido: pedido.numeroPedido,
+                  tipoVenta: pedido.tipoVenta,
+                  estado: pedido.estado,
+                  total: Number(pedido.total),
+                },
+                totalPagado: Number(totalPagado),
+                saldoPendiente: Number(
+                  Prisma.Decimal.max(0, total.sub(totalPagado)),
+                ),
+                pagado: totalPagado.gte(total),
+                reutilizado: true,
+              };
+            }
+            if (
+              cuenta
+                ? pedido.tipoVenta !== 'CREDITO'
+                : pedido.tipoVenta !== 'CONTADO'
+            ) {
+              throw new BadRequestException(
+                'El tipo de venta no corresponde al endpoint de pago',
+              );
+            }
+            if (!cuenta && pedido.cuentaPorCobrar) {
+              throw new BadRequestException(
+                'Un pedido al contado no debe tener una cuenta por cobrar',
+              );
+            }
+            if (pedido.estado === 'CANCELADO') {
+              throw new BadRequestException(
+                'No se pueden registrar pagos para un pedido cancelado',
+              );
+            }
+            const saldo = total.sub(totalPagado);
+            if (saldo.lte(0) || cuenta?.estado === 'PAGADA') {
+              throw new BadRequestException(
+                'El pedido no tiene saldo pendiente',
+              );
+            }
+            if (monto.gt(saldo)) {
+              throw new BadRequestException(
+                `El pago excede el saldo pendiente de Q${saldo.toFixed(2)}`,
+              );
+            }
+            const pago = await tx.pago.create({
+              data: {
+                idPago: dto.idOperacion,
+                idPedido,
+                registradoPor: idUsuario,
+                monto,
+                observaciones,
+              },
+              include: {
+                usuario: {
+                  select: { idUsuario: true, nombre: true, correo: true },
+                },
+              },
+            });
+            const movimiento = await tx.movimientoFinanciero.create({
+              data: {
+                tipo: 'INGRESO',
+                idCategoria: null,
+                monto,
+                concepto: `Pago de ${pedido.numeroPedido}`,
+                descripcion:
+                  observaciones ||
+                  `Pago en efectivo registrado para el pedido ${pedido.numeroPedido}`,
+                registradoPor: idUsuario,
+              },
+            });
+            const nuevoSaldo = saldo.sub(monto);
+            const cuentaActualizada = cuenta
+              ? await tx.cuentaPorCobrar.update({
+                  where: { idCuenta: cuenta.idCuenta },
+                  data: {
+                    estado: nuevoSaldo.isZero() ? 'PAGADA' : 'PENDIENTE',
+                  },
+                })
+              : null;
+            return {
+              pago,
+              movimiento,
+              cuenta: cuentaActualizada,
+              pedido: {
+                idPedido,
+                numeroPedido: pedido.numeroPedido,
+                tipoVenta: pedido.tipoVenta,
+                estado: pedido.estado,
+                total: Number(pedido.total),
+              },
+              totalPagado: Number(totalPagado.add(monto)),
+              saldoPendiente: Number(nuevoSaldo),
+              pagado: nuevoSaldo.isZero(),
+              reutilizado: false,
+            };
           },
-        },
-      });
-
-      const movimiento = await tx.movimientoFinanciero.create({
-        data: {
-          tipo: 'INGRESO',
-
-          idCategoria: null,
-
-          monto: new Prisma.Decimal(montoPago),
-
-          concepto: `Pago de ${pedido.numeroPedido}`,
-
-          descripcion:
-            dto.observaciones?.trim() ||
-            `Pago en efectivo registrado para el pedido ${pedido.numeroPedido}`,
-
-          registradoPor: idUsuario,
-        },
-      });
-
-      return {
-        pago,
-
-        movimiento,
-
-        pedido: {
-          idPedido: pedido.idPedido,
-
-          numeroPedido: pedido.numeroPedido,
-
-          tipoVenta: pedido.tipoVenta,
-
-          estado: pedido.estado,
-
-          total: totalPedido,
-        },
-
-        totalPagado: nuevoTotalPagado,
-
-        saldoPendiente: nuevoSaldo,
-
-        pagado: nuevoSaldo === 0,
-      };
-    });
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      } catch (error) {
+        // El adaptador pg puede exponer conflictos al confirmar como DriverAdapterError.
+        const cause = error instanceof Error ? error.cause : undefined;
+        const adapterConflict =
+          error instanceof Error &&
+          error.name === 'DriverAdapterError' &&
+          typeof cause === 'object' &&
+          cause !== null &&
+          'kind' in cause &&
+          cause.kind === 'TransactionWriteConflict';
+        if (
+          adapterConflict ||
+          (error instanceof Prisma.PrismaClientKnownRequestError &&
+            (error.code === 'P2034' || error.code === 'P2002'))
+        ) {
+          if (attempt < 2) continue;
+          throw new ConflictException(
+            'El pedido cambio durante el pago. Reintenta la misma operacion.',
+          );
+        }
+        throw error;
+      }
+    }
+    throw new ConflictException(
+      'No se pudo registrar el pago. Reintenta la misma operacion.',
+    );
   }
 
   // ============================================================

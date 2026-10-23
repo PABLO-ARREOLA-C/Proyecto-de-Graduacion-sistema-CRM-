@@ -11,6 +11,8 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { CrmModule } from './modules/crm/crm.module';
 import { LogisticsModule } from './modules/logistics/logistics.module';
 import { FinancesModule } from './modules/finances/finances.module';
+import { ClientPortalModule } from './modules/client-portal/client-portal.module';
+import { AuditModule } from './modules/audit/audit.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { FinancesModule } from './modules/finances/finances.module';
     CrmModule,
     LogisticsModule,
     FinancesModule,
+    ClientPortalModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AppService],

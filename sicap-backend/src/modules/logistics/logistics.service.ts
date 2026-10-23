@@ -37,6 +37,10 @@ export class LogisticsService {
     },
     detalles: {
       include: {
+        entregas: {
+          orderBy: { numeroIntento: 'asc' as const },
+          include: { detalles: true, incidencias: true },
+        },
         pedido: {
           include: {
             cliente: true,
@@ -136,6 +140,14 @@ export class LogisticsService {
 
       throw error;
     }
+  }
+
+  async findMine(idUsuario: string) {
+    return this.prisma.ruta.findMany({
+      where: { idRepartidor: idUsuario },
+      include: this.routeInclude,
+      orderBy: [{ fecha: 'desc' }, { fechaCreacion: 'desc' }],
+    });
   }
 
   async findAll() {
@@ -286,6 +298,67 @@ export class LogisticsService {
     }
   }
 
+  async moveStop(idRuta: string, detailId: string, direction: 'UP' | 'DOWN') {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const route = await tx.ruta.findUnique({
+            where: { idRuta },
+            include: { detalles: { orderBy: { ordenParada: 'asc' } } },
+          });
+          if (!route) throw new NotFoundException('Ruta no encontrada');
+          if (route.estado !== 'PLANIFICADA') {
+            throw new BadRequestException(
+              'Solo se pueden reordenar rutas planificadas',
+            );
+          }
+          const index = route.detalles.findIndex(
+            (stop) => stop.idDetalleRuta === detailId,
+          );
+          if (index === -1)
+            throw new NotFoundException('Parada no encontrada en esta ruta');
+          const neighbor =
+            route.detalles[index + (direction === 'UP' ? -1 : 1)];
+          if (!neighbor)
+            throw new BadRequestException(
+              'La parada no puede moverse en esa direccion',
+            );
+          const current = route.detalles[index];
+          // Use a free positive position, even when previous removals left gaps.
+          const occupied = new Set(
+            route.detalles.map((stop) => stop.ordenParada),
+          );
+          let temporary = 1;
+          while (occupied.has(temporary)) temporary++;
+          await tx.detalleRuta.update({
+            where: { idDetalleRuta: current.idDetalleRuta },
+            data: { ordenParada: temporary },
+          });
+          await tx.detalleRuta.update({
+            where: { idDetalleRuta: neighbor.idDetalleRuta },
+            data: { ordenParada: current.ordenParada },
+          });
+          await tx.detalleRuta.update({
+            where: { idDetalleRuta: current.idDetalleRuta },
+            data: { ordenParada: neighbor.ordenParada },
+          });
+          return { message: 'Orden de paradas actualizado' };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2034' || error.code === 'P2002')
+      ) {
+        throw new ConflictException(
+          'La ruta cambio durante la operacion. Actualiza e intenta nuevamente.',
+        );
+      }
+      throw error;
+    }
+  }
+
   async updateDetail(
     idRuta: string,
     idDetalleRuta: string,
@@ -318,9 +391,11 @@ export class LogisticsService {
         data: {
           ordenParada: dto.ordenParada,
           horaEstimada:
-            dto.horaEstimada !== undefined
-              ? this.parseTime(dto.horaEstimada)
-              : undefined,
+            dto.horaEstimada === null
+              ? null
+              : dto.horaEstimada !== undefined
+                ? this.parseTime(dto.horaEstimada)
+                : undefined,
         },
         include: {
           pedido: {

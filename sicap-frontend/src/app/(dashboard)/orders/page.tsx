@@ -14,6 +14,7 @@ import { DataTable } from '@/components/ui/data-table';
 
 import { OrderFormModal } from '@/components/orders/OrderFormModal';
 import { getColumns } from '@/components/orders/columns';
+import { PaymentDetail } from '@/components/finance/PaymentDetail';
 
 import {
   CreateOrderPayload,
@@ -58,6 +59,7 @@ function getErrorMessage(error: unknown): string {
 
 export default function OrdersPage() {
   const queryClient = useQueryClient();
+  const [paymentOrderId, setPaymentOrderId] = useState<string | null>(null);
 
   const [modalOpen, setModalOpen] =
     useState(false);
@@ -109,9 +111,10 @@ export default function OrdersPage() {
     }) => orderService.update(id, data),
 
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ['orders'],
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['finances'] }),
+      ]);
 
       toast.success(
         'Pedido actualizado correctamente.',
@@ -121,10 +124,11 @@ export default function OrdersPage() {
       setModalOpen(false);
     },
 
-    onError: (mutationError) => {
+    onError: async (mutationError) => {
       toast.error(
         getErrorMessage(mutationError),
       );
+      await queryClient.invalidateQueries({ queryKey: ['finances'] });
     },
   });
 
@@ -246,6 +250,7 @@ export default function OrdersPage() {
     onEdit: handleEdit,
     onConfirm: handleConfirm,
     onCancel: handleCancel,
+    onPayments: (order) => setPaymentOrderId(order.idPedido),
   });
 
   if (isLoading) {
@@ -307,6 +312,10 @@ export default function OrdersPage() {
         onSubmit={handleSubmit}
         initialData={selectedOrder}
       />
+      {paymentOrderId && (
+        <PaymentDetail key={paymentOrderId} id={paymentOrderId}
+          onClose={() => setPaymentOrderId(null)} />
+      )}
     </div>
   );
 }

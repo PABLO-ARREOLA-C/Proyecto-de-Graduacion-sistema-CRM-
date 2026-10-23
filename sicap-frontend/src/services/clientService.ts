@@ -13,6 +13,7 @@ export interface BackendClientAddress {
 }
 
 interface BackendClient {
+  idUsuario?: string | null;
   idCliente: string;
   nombre: string;
   telefono: string;
@@ -24,6 +25,7 @@ interface BackendClient {
 }
 
 export interface Client {
+  userId?: string | null;
   id: string;
   name: string;
   email: string;
@@ -52,6 +54,7 @@ function mapClient(client: BackendClient): Client {
     client.direcciones?.[0];
 
   return {
+    userId: client.idUsuario,
     id: client.idCliente,
     name: client.nombre,
     email: client.correo ?? "",

@@ -5,6 +5,7 @@
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { serializableTransaction } from '../prisma/serializable-transaction';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
@@ -145,58 +146,78 @@ export class OrdersService {
   }
 
   async update(idPedido: string, dto: UpdateOrderDto) {
-    const pedido = await this.ensureOrderExists(idPedido);
-
-    if (pedido.estado === 'ENTREGADO' || pedido.estado === 'CANCELADO') {
-      throw new BadRequestException(
-        'No se puede modificar un pedido entregado o cancelado',
-      );
-    }
-
-    if (dto.idDireccion !== undefined) {
-      const direccion = await this.prisma.direccionCliente.findFirst({
-        where: {
-          idDireccion: dto.idDireccion,
-          idCliente: pedido.idCliente,
-          estado: true,
+    return serializableTransaction(this.prisma, async (tx) => {
+      const pedido = await tx.pedido.findUnique({
+        where: { idPedido },
+        include: {
+          pagos: { select: { idPago: true }, take: 1 },
+          cuentaPorCobrar: { select: { idCuenta: true } },
         },
       });
-
-      if (!direccion) {
+      if (!pedido) throw new NotFoundException('Pedido no encontrado');
+      if (
+        dto.tipoVenta !== undefined &&
+        dto.tipoVenta !== pedido.tipoVenta &&
+        (pedido.pagos.length > 0 || pedido.cuentaPorCobrar)
+      ) {
         throw new BadRequestException(
-          'La direcciÃ³n no pertenece al cliente o se encuentra inactiva',
+          'No se puede cambiar el tipo de venta de un pedido con pagos o cuenta por cobrar',
         );
       }
-    }
 
-    const data: Prisma.PedidoUpdateInput = {};
+      if (pedido.estado === 'ENTREGADO' || pedido.estado === 'CANCELADO') {
+        throw new BadRequestException(
+          'No se puede modificar un pedido entregado o cancelado',
+        );
+      }
 
-    if (dto.idDireccion !== undefined) {
-      data.direccion = {
-        connect: {
-          idDireccion: dto.idDireccion,
+      if (dto.idDireccion !== undefined) {
+        const direccion = await tx.direccionCliente.findFirst({
+          where: {
+            idDireccion: dto.idDireccion,
+            idCliente: pedido.idCliente,
+            estado: true,
+          },
+        });
+
+        if (!direccion) {
+          throw new BadRequestException(
+            'La direcciÃ³n no pertenece al cliente o se encuentra inactiva',
+          );
+        }
+      }
+
+      const data: Prisma.PedidoUpdateInput = {};
+
+      if (dto.idDireccion !== undefined) {
+        data.direccion = {
+          connect: {
+            idDireccion: dto.idDireccion,
+          },
+        };
+      }
+
+      if (dto.fechaEntregaSolicitada !== undefined) {
+        data.fechaEntregaSolicitada = this.parseDate(
+          dto.fechaEntregaSolicitada,
+        );
+      }
+
+      if (dto.tipoVenta !== undefined) {
+        data.tipoVenta = dto.tipoVenta;
+      }
+
+      if (dto.observaciones !== undefined) {
+        data.observaciones = dto.observaciones.trim();
+      }
+
+      return tx.pedido.update({
+        where: {
+          idPedido,
         },
-      };
-    }
-
-    if (dto.fechaEntregaSolicitada !== undefined) {
-      data.fechaEntregaSolicitada = this.parseDate(dto.fechaEntregaSolicitada);
-    }
-
-    if (dto.tipoVenta !== undefined) {
-      data.tipoVenta = dto.tipoVenta;
-    }
-
-    if (dto.observaciones !== undefined) {
-      data.observaciones = dto.observaciones.trim();
-    }
-
-    return this.prisma.pedido.update({
-      where: {
-        idPedido,
-      },
-      data,
-      include: this.orderInclude(),
+        data,
+        include: this.orderInclude(),
+      });
     });
   }
 

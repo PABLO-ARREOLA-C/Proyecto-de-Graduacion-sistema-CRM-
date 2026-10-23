@@ -17,6 +17,7 @@ interface OrderColumnsProps {
   onEdit: (order: Order) => void;
   onConfirm: (order: Order) => void;
   onCancel: (order: Order) => void;
+  onPayments: (order: Order) => void;
 }
 
 function formatCurrency(value: number | string): string {
@@ -66,6 +67,7 @@ export function getColumns({
   onEdit,
   onConfirm,
   onCancel,
+  onPayments,
 }: OrderColumnsProps): ColumnDef<Order>[] {
   return [
     {
@@ -133,6 +135,9 @@ export function getColumns({
             </DropdownMenuTrigger>
 
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onPayments(order)}>
+                Ver pagos / Cobrar
+              </DropdownMenuItem>
              
 
               {!isFinalized && (

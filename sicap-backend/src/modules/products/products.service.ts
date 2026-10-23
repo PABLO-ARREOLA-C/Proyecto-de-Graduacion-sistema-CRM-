@@ -200,9 +200,11 @@ export class ProductsService {
         : promocion.fechaInicio;
 
     const fechaFin =
-      dto.fechaFin !== undefined
-        ? this.parseDate(dto.fechaFin)
-        : promocion.fechaFin;
+      dto.fechaFin === null
+        ? null
+        : dto.fechaFin !== undefined
+          ? this.parseDate(dto.fechaFin)
+          : promocion.fechaFin;
 
     this.validateDateRange(fechaInicio, fechaFin ?? undefined);
 
@@ -277,7 +279,16 @@ export class ProductsService {
   }
 
   private parseDate(value: string): Date {
-    return new Date(`${value}T00:00:00.000Z`);
+    const day = value.slice(0, 10);
+    const parsed = new Date(`${day}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== day
+    ) {
+      throw new BadRequestException('La fecha no es válida; usa YYYY-MM-DD');
+    }
+    return parsed;
   }
 
   private validateDateRange(fechaInicio: Date, fechaFin?: Date) {

@@ -94,7 +94,7 @@ const menuItems: MenuItem[] = [
     label: "Finanzas",
     href: "/finance",
     icon: WalletCards,
-    roles: ["ADMIN"],
+    roles: ["ADMIN", "DRIVER"],
   },
   {
     label: "Promociones",

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -55,6 +56,14 @@ export class UsersService {
       this.handlePrismaError(error);
       throw error;
     }
+  }
+
+  async findRoles() {
+    return this.prisma.rol.findMany({
+      where: { estado: true },
+      select: { idRol: true, nombre: true },
+      orderBy: { nombre: 'asc' },
+    });
   }
 
   async findAll() {
@@ -163,6 +172,61 @@ export class UsersService {
     });
   }
 
+  async linkClient(idUsuario: string, idCliente: string | null) {
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const user = await tx.usuario.findUnique({
+            where: { idUsuario },
+            select: { rol: { select: { nombre: true } } },
+          });
+          if (!user) throw new NotFoundException('Usuario no encontrado');
+          if (user.rol.nombre !== 'Cliente') {
+            throw new BadRequestException('La cuenta debe tener rol Cliente');
+          }
+          if (idCliente !== null) {
+            const target = await tx.cliente.findUnique({
+              where: { idCliente },
+            });
+            if (!target || !target.estado)
+              throw new NotFoundException('Cliente activo no encontrado');
+            if (target.idUsuario && target.idUsuario !== idUsuario) {
+              throw new ConflictException(
+                'La ficha ya está vinculada a otra cuenta',
+              );
+            }
+          }
+          await tx.cliente.updateMany({
+            where: { idUsuario },
+            data: { idUsuario: null },
+          });
+          if (idCliente !== null) {
+            const linked = await tx.cliente.updateMany({
+              where: { idCliente, idUsuario: null, estado: true },
+              data: { idUsuario },
+            });
+            if (linked.count !== 1)
+              throw new ConflictException(
+                'La ficha cambió; actualiza e intenta nuevamente',
+              );
+          }
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        ['P2002', 'P2034'].includes(error.code)
+      ) {
+        throw new ConflictException(
+          'La vinculación cambió; actualiza e intenta nuevamente',
+        );
+      }
+      throw error;
+    }
+    return this.findOne(idUsuario);
+  }
+
   private async ensureUserExists(idUsuario: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: {
@@ -196,6 +260,7 @@ export class UsersService {
     estado: true,
     fechaCreacion: true,
     fechaUltimaConexion: true,
+    cliente: { select: { idCliente: true, nombre: true, estado: true } },
     rol: {
       select: {
         idRol: true,

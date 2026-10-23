@@ -32,6 +32,7 @@ model Usuario {
   fechaUltimaConexion DateTime? @map("fecha_ultima_conexion") @db.Timestamptz(6)
 
   rol Rol @relation(fields: [idRol], references: [idRol])
+  cliente Cliente?
 
   auditorias             Auditoria[]
   prospectosResponsable  Prospecto[]             @relation("ProspectoResponsable")
@@ -72,6 +73,7 @@ model Auditoria {
 
 model Cliente {
   idCliente          String   @id @default(uuid()) @map("id_cliente") @db.Uuid
+  idUsuario          String?  @unique @map("id_usuario") @db.Uuid
   nombre             String   @db.VarChar(100)
   telefono           String   @db.VarChar(20)
   correo             String?  @db.VarChar(100)
@@ -82,6 +84,7 @@ model Cliente {
 
   direcciones DireccionCliente[]
   pedidos     Pedido[]
+  usuario     Usuario? @relation(fields: [idUsuario], references: [idUsuario], onDelete: SetNull)
 
   @@index([nombre])
   @@index([telefono])

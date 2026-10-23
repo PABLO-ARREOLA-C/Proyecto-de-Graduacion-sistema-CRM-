@@ -32,7 +32,7 @@ export class UpdatePromotionDto {
 
   @IsOptional()
   @IsDateString()
-  fechaFin?: string;
+  fechaFin?: string | null;
 
   @IsOptional()
   @IsBoolean()

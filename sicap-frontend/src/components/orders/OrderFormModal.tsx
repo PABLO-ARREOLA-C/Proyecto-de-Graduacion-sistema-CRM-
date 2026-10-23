@@ -29,6 +29,7 @@ import {
 
 import { clientService } from '@/services/clientService';
 import { productService } from '@/services/productService';
+import { financeService } from '@/services/financeService';
 
 import {
   CreateOrderPayload,
@@ -162,6 +163,16 @@ export function OrderFormModal({
     [clients, selectedClientId],
   );
 
+  const financialStatus = useQuery({
+    queryKey: ['finances', 'status', initialData?.idPedido],
+    queryFn: () => financeService.getOrderStatus(initialData!.idPedido),
+    enabled: open && Boolean(initialData),
+  });
+  const hasFinancialRecords = Boolean(financialStatus.data &&
+    (financialStatus.data.totalPagado > 0 || financialStatus.data.cuentaPorCobrar));
+  const saleTypeLocked = Boolean(initialData) &&
+    (financialStatus.isPending || financialStatus.isFetching || financialStatus.isError || hasFinancialRecords);
+
   const selectedProduct = useMemo(
     () =>
       products.find(
@@ -277,7 +288,7 @@ export function OrderFormModal({
         idDireccion: data.idDireccion,
         fechaEntregaSolicitada:
           data.fechaEntregaSolicitada,
-        tipoVenta: data.tipoVenta,
+        ...(!saleTypeLocked && data.tipoVenta !== initialData.tipoVenta ? { tipoVenta: data.tipoVenta } : {}),
         observaciones:
           data.observaciones?.trim() ?? '',
       };
@@ -460,7 +471,8 @@ export function OrderFormModal({
               <Label>Tipo de venta</Label>
 
               <Select
-                value={saleType}
+                value={saleTypeLocked && initialData ? initialData.tipoVenta : saleType}
+                disabled={saleTypeLocked || isSubmitting}
                 onValueChange={
                   handleSaleTypeChange
                 }
@@ -479,6 +491,14 @@ export function OrderFormModal({
                   </SelectItem>
                 </SelectContent>
               </Select>
+              {initialData && <div className="text-sm text-muted-foreground">
+                {financialStatus.isError ? <>
+                  No se pudo verificar el estado financiero. Puedes editar los demás campos.
+                  <button type="button" className="ml-2 underline" onClick={() => financialStatus.refetch()}>Reintentar consulta</button>
+                </> : financialStatus.isPending || financialStatus.isFetching ? 'Verificando pagos y cuenta por cobrar...' : hasFinancialRecords
+                  ? 'El tipo de venta no puede cambiar porque el pedido tiene pagos o una cuenta por cobrar.'
+                  : 'Puedes cambiar el tipo de venta mientras no existan pagos ni cuenta por cobrar.'}
+              </div>}
             </div>
 
             {/* PRODUCTO */}

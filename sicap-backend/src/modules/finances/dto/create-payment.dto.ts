@@ -2,12 +2,16 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreatePaymentDto {
+  @IsUUID()
+  idOperacion!: string;
+
   @Type(() => Number)
   @IsNumber({
     maxDecimalPlaces: 2,

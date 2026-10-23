@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Req,
+  Query,
   UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
@@ -15,6 +16,8 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CrmService } from './crm.service';
+import { PurchaseAlertsService } from './purchase-alerts.service';
+import { PurchaseAlertQueryDto } from './dto/purchase-alert-query.dto';
 import {
   CreateProspectDto,
   ProspectProductDto,
@@ -38,7 +41,18 @@ interface AuthenticatedRequest extends Request {
 @Roles('Administrador', 'Repartidor')
 @Controller('crm')
 export class CrmController {
-  constructor(private readonly crmService: CrmService) {}
+  constructor(
+    private readonly crmService: CrmService,
+    private readonly purchaseAlerts: PurchaseAlertsService,
+  ) {}
+
+  @Get('purchase-alerts')
+  findPurchaseAlerts(
+    @Query() query: PurchaseAlertQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.purchaseAlerts.list(query, request.user);
+  }
 
   @Post('prospects')
   create(@Body() dto: CreateProspectDto, @Req() request: AuthenticatedRequest) {

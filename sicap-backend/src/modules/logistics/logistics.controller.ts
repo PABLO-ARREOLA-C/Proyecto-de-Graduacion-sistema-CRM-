@@ -16,6 +16,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 
+import { MoveRouteStopDto } from './dto/move-route-stop.dto';
 import { AddOrderToRouteDto } from './dto/add-order-to-route.dto';
 import { CreateDeliveryDto } from './dto/create-delivery.dto';
 import { CreateDeliveryIncidentDto } from './dto/create-delivery-incident.dto';
@@ -25,6 +26,7 @@ import { UpdateRouteDetailDto } from './dto/update-route-detail.dto';
 import { UpdateRouteDto } from './dto/update-route.dto';
 
 import { LogisticsService } from './logistics.service';
+import { RouteAccessGuard } from './route-access.guard';
 
 type AuthenticatedRequest = Request & {
   user: {
@@ -36,7 +38,7 @@ type AuthenticatedRequest = Request & {
   };
 };
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, RouteAccessGuard)
 @Roles('Administrador', 'Repartidor')
 @Controller('logistics')
 export class LogisticsController {
@@ -52,8 +54,16 @@ export class LogisticsController {
   }
 
   @Get('routes')
-  findRoutes() {
-    return this.logisticsService.findAll();
+  findRoutes(@Req() request: AuthenticatedRequest) {
+    return request.user.rol === 'Repartidor'
+      ? this.logisticsService.findMine(request.user.idUsuario)
+      : this.logisticsService.findAll();
+  }
+
+  @Get('my-routes')
+  @Roles('Repartidor')
+  findMyRoutes(@Req() request: AuthenticatedRequest) {
+    return this.logisticsService.findMine(request.user.idUsuario);
   }
 
   @Get('routes/:id')
@@ -79,6 +89,15 @@ export class LogisticsController {
     @Body() dto: AddOrderToRouteDto,
   ) {
     return this.logisticsService.addOrder(id, dto);
+  }
+
+  @Post('routes/:id/details/:detailId/move')
+  moveStop(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('detailId', ParseUUIDPipe) detailId: string,
+    @Body() dto: MoveRouteStopDto,
+  ) {
+    return this.logisticsService.moveStop(id, detailId, dto.direction);
   }
 
   @Patch('routes/:id/details/:detailId')
